@@ -9,6 +9,7 @@ from datasets.shapenet import build_shapenet
 from models.nerf import build_nerf
 from models.rendering import get_rays_shapenet, sample_points, volume_render
 from models.NeuSModel import Runner
+from tqdm import tqdm
 
 def NeuS_inner_loop(model, optim, imgs, poses, hwf, bound, num_samples, raybatch_size, inner_steps, scene_idx):
     """
@@ -21,6 +22,7 @@ def NeuS_inner_loop(model, optim, imgs, poses, hwf, bound, num_samples, raybatch
 
     num_rays = rays_d.shape[0]
     for step in range(inner_steps):
+        # print(f'Current epoch {step}')
         indices = torch.randint(num_rays, size=[raybatch_size])
         raybatch_o, raybatch_d = rays_o[indices], rays_d[indices]
         pixelbatch = pixels[indices]
@@ -122,7 +124,8 @@ def train_meta(args, meta_model, meta_optim, data_loader, device):
     train the meta_model for one epoch using reptile meta learning
     https://arxiv.org/abs/1803.02999
     """
-    for imgs, poses, hwf, bound in data_loader:
+    for imgs, poses, hwf, bound in tqdm(data_loader):
+        print('step')
         imgs, poses, hwf, bound = imgs.to(device), poses.to(device), hwf.to(device), bound.to(device)
         imgs, poses, hwf, bound = imgs.squeeze(), poses.squeeze(), hwf.squeeze(), bound.squeeze()
         scene_idx = 0
