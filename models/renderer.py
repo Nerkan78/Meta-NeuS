@@ -69,7 +69,8 @@ def sample_pdf(bins, weights, n_samples, det=False):
     return samples
 
 
-class NeuSRenderer:
+class NeuSRenderer(nn.Module):
+
     def __init__(self,
                  nerf,
                  sdf_network,
@@ -80,6 +81,7 @@ class NeuSRenderer:
                  n_outside,
                  up_sample_steps,
                  perturb):
+        super().__init__()
         self.nerf = nerf
         self.sdf_network = sdf_network
         self.deviation_network = deviation_network

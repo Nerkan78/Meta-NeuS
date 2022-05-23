@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from datasets.shapenet import build_shapenet
 from models.nerf import build_nerf
 from models.rendering import get_rays_shapenet, sample_points, volume_render
-from models.NeusModel import Runner
+from models.NeuSModel import Runner
 
 def NeuS_inner_loop(model, optim, imgs, poses, hwf, bound, num_samples, raybatch_size, inner_steps, scene_idx):
     """
@@ -33,7 +33,7 @@ def NeuS_inner_loop(model, optim, imgs, poses, hwf, bound, num_samples, raybatch
         use_white_bkgd = True
         background_rgb = None
         if use_white_bkgd:
-            background_rgb = torch.ones([1, 3])
+            background_rgb = torch.ones([1, 3]).to('cuda')
         optim.zero_grad()
         render_out = model.renderer.render(
             raybatch_o, raybatch_d, near, far, scene_idx,
@@ -43,6 +43,7 @@ def NeuS_inner_loop(model, optim, imgs, poses, hwf, bound, num_samples, raybatch
             compute_radiance_grad_loss=model.radiance_grad_weight > 0)
 
         color_fine = render_out['color_fine']
+        # print(f'--------COLOR FINE SIZE {color_fine.size()}')
         # rgbs, sigmas = model(xyz)
         # colors = volume_render(rgbs, sigmas, t_vals, white_bkgd=True)
         # loss = F.mse_loss(colors, pixelbatch)
@@ -51,7 +52,9 @@ def NeuS_inner_loop(model, optim, imgs, poses, hwf, bound, num_samples, raybatch
         loss = 0
 
         # Image loss: L1
-        target_rgb = t_vals
+        target_rgb = pixelbatch
+        # print(f'--------target_rgb SIZE {target_rgb.size()}')
+
         color_fine_loss = (color_fine - target_rgb).abs().mean()
         loss += color_fine_loss
 
@@ -119,10 +122,10 @@ def train_meta(args, meta_model, meta_optim, data_loader, device):
     train the meta_model for one epoch using reptile meta learning
     https://arxiv.org/abs/1803.02999
     """
-    for scene_idx, imgs, poses, hwf, bound in enuemrate(data_loader):
+    for imgs, poses, hwf, bound in data_loader:
         imgs, poses, hwf, bound = imgs.to(device), poses.to(device), hwf.to(device), bound.to(device)
         imgs, poses, hwf, bound = imgs.squeeze(), poses.squeeze(), hwf.squeeze(), bound.squeeze()
-
+        scene_idx = 0
         meta_optim.zero_grad()
 
         inner_model = copy.deepcopy(meta_model)
@@ -173,22 +176,23 @@ def val_meta(args, model, val_loader, device):
     """
     validate the meta trained model for few-shot view synthesis
     """
-    meta_trained_state = model.state_dict()
+    meta_trained_state = model.renderer.state_dict()
     val_model = copy.deepcopy(model)
     
     val_psnrs = []
     for imgs, poses, hwf, bound in val_loader:
         imgs, poses, hwf, bound = imgs.to(device), poses.to(device), hwf.to(device), bound.to(device)
         imgs, poses, hwf, bound = imgs.squeeze(), poses.squeeze(), hwf.squeeze(), bound.squeeze()
+        scene_idx = 0
 
         tto_imgs, test_imgs = torch.split(imgs, [args.tto_views, args.test_views], dim=0)
         tto_poses, test_poses = torch.split(poses, [args.tto_views, args.test_views], dim=0)
 
-        val_model.load_state_dict(meta_trained_state)
-        val_optim = torch.optim.SGD(val_model.parameters(), args.tto_lr)
+        val_model.renderer.load_state_dict(meta_trained_state)
+        val_optim = torch.optim.SGD(val_model.renderer.parameters(), args.tto_lr)
 
-        inner_loop(val_model, val_optim, tto_imgs, tto_poses, hwf,
-                    bound, args.num_samples, args.tto_batchsize, args.tto_steps)
+        NeuS_inner_loop(val_model, val_optim, tto_imgs, tto_poses, hwf,
+                    bound, args.num_samples, args.tto_batchsize, args.tto_steps, scene_idx)
         
         scene_psnr = report_result(val_model, test_imgs, test_poses, hwf, bound, 
                                     args.num_samples, args.test_batchsize)
@@ -202,6 +206,10 @@ def main():
     parser = argparse.ArgumentParser(description='shapenet few-shot view synthesis')
     parser.add_argument('--config', type=str, required=True,
                         help='config file for the shape class (cars, chairs or lamps)')
+    parser.add_argument('--neus_conf', type=str, required=True,
+                        help='config filepath for the NeuS renderer')
+    parser.add_argument('--device', type=str, required=True,
+                        help='computational device')
     args = parser.parse_args()
 
     with open(args.config) as config:
@@ -222,7 +230,7 @@ def main():
 
     # meta_model = build_nerf(args)
     meta_model = Runner(args, device)
-    meta_model.to(device)
+    # meta_model.to(device)
 
     meta_optim = torch.optim.Adam(meta_model.renderer.parameters(), lr=args.meta_lr)
 
@@ -233,7 +241,7 @@ def main():
 
         torch.save({
             'epoch': epoch,
-            'meta_model_state_dict': meta_model.state_dict(),
+            'meta_model_state_dict': meta_model.renderer.state_dict(),
             'meta_optim_state_dict': meta_optim.state_dict(),
             }, f'meta_epoch{epoch}.pth')
 
